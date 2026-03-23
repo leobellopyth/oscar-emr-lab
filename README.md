@@ -97,6 +97,26 @@ docker compose down -v       # full reset (wipes all data)
 
 ---
 
+## ⚠️ Security Warning (Public Servers)
+
+This package is designed for **local research and learning only**.
+
+If you deploy on a VPS, cloud server, or any machine with a public IP:
+
+- Port `9090` will be publicly accessible by default
+- Default credentials (`mac2002`) are well-known
+- There is no HTTPS, no firewall, no 2FA configured
+
+**Before exposing publicly:**
+1. Change the default password via OSCAR's admin panel
+2. Add a firewall rule: `sudo ufw allow from YOUR_IP to any port 9090`
+3. Put a reverse proxy (nginx) in front with HTTPS
+4. Enable 2FA in OSCAR Admin → Security
+
+For a home network behind a router with no port forwarding, the default setup is fine.
+
+---
+
 ## Repository Structure
 
 ```
@@ -159,6 +179,50 @@ Key schema tables documented through this work:
 | Drug profile 500 error | Hibernate null primitive on boolean columns | `install.sh` sets all to 0 |
 | "Not in your program domain" | Patient not admitted to CAISI program | `seed.sql` + import auto-admits |
 | eChart session crash | `case_program_id` null in session | `patch_forward_jsp.sh` |
+
+---
+
+## Using Claude Code (AI) to Explore OSCAR
+
+This entire lab environment was built and debugged using
+[Claude Code](https://claude.ai/code) — Anthropic's AI coding assistant —
+as a learning and development tool alongside a clinician-researcher.
+
+Claude Code was used to:
+- Trace Java stack traces and identify root causes in a 20-year-old codebase
+- Map the OSCAR database schema to clinical concepts
+- Write and debug the Synthea import pipeline
+- Identify and patch JSP session bugs without recompiling
+- Connect OSCAR's architecture to FHIR and Ontario health policy context
+
+### Suggested prompts to explore OSCAR with Claude Code
+
+Once your lab is running, paste these into a Claude Code session:
+
+```
+"I have OSCAR EMR running at localhost:9090 with MariaDB at localhost:3306
+(root / oscarlab). Help me understand how the CPP (Cumulative Patient
+Profile) is stored in the database."
+```
+
+```
+"Write a SQL query against my OSCAR database to find all patients
+with more than 3 active medications and no encounter in the past year."
+```
+
+```
+"Explain what the CAISI program_provider and admission tables do
+clinically, and how they control eChart access in OSCAR."
+```
+
+```
+"I want to understand how OSCAR stores encounter notes. Walk me through
+the casemgmt_note table and how it relates to issues and the CPP."
+```
+
+Claude Code can read your local files, run queries, and explain what it
+finds in clinical terms — useful if you're a clinician learning informatics
+or an informaticist learning clinical context.
 
 ---
 
