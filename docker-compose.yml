@@ -1,0 +1,52 @@
+services:
+
+  db:
+    image: mariadb:10.5
+    container_name: oscar-lab-db
+    restart: unless-stopped
+    command: mysqld --character-set-server=utf8 --collation-server=utf8_general_ci
+    env_file: .env
+    environment:
+      MYSQL_DATABASE: drugref2
+      MYSQL_USER: oscar
+    volumes:
+      - oscar-lab-db:/var/lib/mysql
+    networks:
+      - oscar-lab-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 9
+
+  oscar:
+    image: openosp/open-osp:latest
+    container_name: oscar-lab-oscar
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./volumes/oscar.properties:/root/oscar.properties
+      - oscar-lab-documents:/var/lib/OscarDocument
+    ports:
+      - "9090:8080"
+    environment:
+      TZ: America/Toronto
+      CATALINA_OPTS: -Djava.awt.headless=true
+      JAVA_OPTS: >-
+        -Dlog4j2.formatMsgNoLookups=true
+        -XX:+UseConcMarkSweepGC
+        -Xmx2G -Xms1G
+        -XX:MaxPermSize=512m
+        -Dorg.apache.el.parser.COERCE_TO_ZERO=true
+    networks:
+      - oscar-lab-net
+
+volumes:
+  oscar-lab-db:
+  oscar-lab-documents:
+
+networks:
+  oscar-lab-net:
+    driver: bridge

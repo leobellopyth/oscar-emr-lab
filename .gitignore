@@ -1,0 +1,19 @@
+# Environment — never commit real credentials
+.env
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Synthea output (large, not tracked)
+output/
+synthea.jar
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
