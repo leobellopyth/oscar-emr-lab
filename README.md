@@ -174,5 +174,6 @@ This repo contains only tooling and configuration — no OSCAR source code.
 ## Author
 
 Built by [@leobellopyth](https://github.com/leobellopyth) —
-RN · Graduate Certificate Health Informatics (George Brown College, 2026) ·
+Registered Nurse (RN) · Currently completing a Graduate Certificate
+in Health Informatics at George Brown College (April 2026) ·
 Clinical Informatics researcher
