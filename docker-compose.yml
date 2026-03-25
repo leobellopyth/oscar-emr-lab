@@ -1,0 +1,42 @@
+services:
+
+  db:
+    restart: always
+    image: mariadb:10.5
+    command: mysqld --character-set-server=utf8 --collation-server=utf8_general_ci
+    env_file: .env
+    environment:
+      MYSQL_DATABASE: drugref2
+      MYSQL_USER: oscar
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    networks:
+      - oscar-net
+
+  oscar:
+    restart: always
+    image: openosp/open-osp:latest
+    ports:
+      - "${OSCAR_PORT:-9090}:8080"
+    volumes:
+      - ./volumes/oscar.properties:/root/oscar.properties
+      - oscar-documents:/var/lib/OscarDocument
+    networks:
+      - oscar-net
+    environment:
+      TZ: America/Toronto
+      CATALINA_OPTS: -Djava.awt.headless=true
+      JAVA_OPTS: >-
+        -Dlog4j2.formatMsgNoLookups=true
+        -XX:+UseConcMarkSweepGC
+        -Xmx1G -Xms512m
+    depends_on:
+      - db
+
+volumes:
+  mariadb-data:
+  oscar-documents:
+
+networks:
+  oscar-net:
+    driver: bridge
