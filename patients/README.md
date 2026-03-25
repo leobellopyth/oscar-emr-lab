@@ -90,3 +90,34 @@ Change `demographicNo=1` to any number from the import output.
   which is required for eChart access.
 - Province is set to `ON` (Ontario) regardless of Synthea's US geography.
 - Health card numbers (HIN) are randomly generated for Ontario format.
+
+---
+
+## Troubleshooting — eChart 500 errors after import
+
+If you imported patients with a version of this script older than commit
+`3c5f95a` and the eChart throws a 500 error, run this one-time SQL patch:
+
+```sql
+-- Fix 1: casemgmt_note primitive fields left NULL by old script
+UPDATE casemgmt_note
+SET
+  locked                       = COALESCE(locked, 0),
+  appointmentNo                = COALESCE(appointmentNo, 0),
+  hourOfEncounterTime          = COALESCE(hourOfEncounterTime, 0),
+  minuteOfEncounterTime        = COALESCE(minuteOfEncounterTime, 0),
+  hourOfEncTransportationTime  = COALESCE(hourOfEncTransportationTime, 0),
+  minuteOfEncTransportationTime= COALESCE(minuteOfEncTransportationTime, 0),
+  reporter_caisi_role          = COALESCE(NULLIF(reporter_caisi_role,''), '2'),
+  reporter_program_team        = COALESCE(NULLIF(reporter_program_team,''), '0'),
+  program_no                   = COALESCE(NULLIF(program_no,''), '10034')
+WHERE provider_no = '999998';
+
+-- Fix 2: admission_status required for program lookup
+UPDATE admission
+SET admission_status = 'current'
+WHERE admission_status IS NULL OR admission_status = 'active';
+```
+
+Run against the OSCAR MariaDB (default port 3306), then hard-refresh the
+browser. No container restart needed.
