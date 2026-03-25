@@ -173,8 +173,10 @@ def main():
         cur.execute("""
             INSERT INTO admission
               (client_id, program_id, provider_no, admission_date, discharge_date,
-               temporary_admission_flag, automatic_discharge, admission_notes, lastUpdateDate)
-            VALUES (%s, 10034, %s, NOW(), NULL, 0, 0, 'Auto-admitted by Synthea import', NOW())
+               temporary_admission_flag, automatic_discharge, admission_notes, lastUpdateDate,
+               admission_status)
+            VALUES (%s, 10034, %s, NOW(), NULL, 0, 0, 'Auto-admitted by Synthea import', NOW(),
+               'current')
         """, (demo_no, PROVIDER_NO))
 
         # ── Observations → measurements ───────────────────────────────────
@@ -237,10 +239,14 @@ def main():
             cur.execute("""
                 INSERT INTO casemgmt_note
                   (demographic_no, note, observation_date, update_date,
-                   provider_no, signing_provider_no, signed, archived, encounter_type)
-                VALUES (%s, %s, %s, NOW(), %s, %s, 1, 0, %s)
+                   provider_no, signing_provider_no, signed, archived, encounter_type,
+                   program_no, reporter_caisi_role, reporter_program_team,
+                   locked, appointmentNo, hourOfEncounterTime, minuteOfEncounterTime,
+                   hourOfEncTransportationTime, minuteOfEncTransportationTime)
+                VALUES (%s, %s, %s, NOW(), %s, %s, 1, 0, %s, %s, '2', '0',
+                        0, 0, 0, 0, 0, 0)
             """, (demo_no, enc_type, enc_date or date.today(),
-                  PROVIDER_NO, PROVIDER_NO, enc_type[:100]))
+                  PROVIDER_NO, PROVIDER_NO, enc_type[:100], '10034'))
             enc_ct += 1
 
         conn.commit()
