@@ -7,6 +7,7 @@ MedGemma 4B (local Ollama) interprets the results clinically.
 """
 
 import json
+import os
 import requests
 import pymysql
 
@@ -14,7 +15,7 @@ import pymysql
 # CONFIG
 # ---------------------------------------------------------------------------
 
-GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")  # export GROQ_API_KEY=gsk_...
 GROQ_MODEL     = "llama-3.3-70b-versatile"
 GROQ_URL       = "https://api.groq.com/openai/v1/chat/completions"
 

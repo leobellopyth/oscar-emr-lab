@@ -1,178 +1,272 @@
 # oscar-emr-lab
 
-A reproducible OSCAR EMR lab environment pre-loaded with Ontario synthetic patients,
-built for primary care informatics research and education.
+**A one-command research and learning environment for OSCAR EMR 19**
 
-**What you get:**
-- OSCAR 19 (Ontario) running in Docker on port 9090
-- 787 synthetic Ontario patients with realistic demographics, diagnoses, medications, labs, and encounter history
-- Natural language query tool (Groq SQL generation + MedGemma clinical interpretation)
-- Fidelity report comparing the cohort to Statistics Canada 2021 Census and CCHS 2019–2020 Ontario data
+OSCAR is the second-largest EMR in Ontario (~20% of family physicians).
+In March 2026, Ontario announced a provincewide EMR consolidation — making
+this an important moment to study, understand, and build on OSCAR's
+clinical data architecture.
+
+This package gives clinicians, informaticists, and students a fully working
+OSCAR instance in minutes — no source compilation, no Bitbucket access,
+no prior sysadmin experience required.
+
+---
+
+## What you get
+
+- ✅ OSCAR EMR 19 running in Docker (pre-built image — no compilation)
+- ✅ Login pre-configured (`oscardoc` / `mac2002` / PIN `1117`)
+- ✅ CAISI program enrollment seeded (required for eChart access)
+- ✅ eChart working out of the box
+- ✅ Synthea patient import pipeline included
+- ✅ Post-install bug fixes applied automatically
 
 ---
 
 ## Prerequisites
 
-- Docker Desktop (or Docker Engine + Compose plugin)
-- Python 3.9+ with `pymysql` (`pip install pymysql`)
-- 4 GB RAM available for Docker
+- [Docker Desktop](https://docs.docker.com/get-docker/) (Windows / Mac / Linux)
+- That's it.
 
 ---
 
-## Setup
-
-### 1. Clone and configure
+## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/oscar-emr-lab.git
+git clone https://github.com/leobellopyth/oscar-emr-lab.git
 cd oscar-emr-lab
-cp .env.example .env
+bash setup/install.sh        # Linux / Mac
+# or: .\setup\install.ps1    # Windows PowerShell
 ```
 
-Edit `.env` and set a secure `MYSQL_ROOT_PASSWORD`.
+First run pulls ~620 MB from Docker Hub and starts Tomcat (~60–90 s).
+No source compilation. No Bitbucket.
 
-### 2. Run the installer
+When done:
 
-**Linux / macOS:**
-```bash
-bash setup/install.sh
 ```
+✓ OSCAR EMR 19 is running.
 
-**Windows (PowerShell):**
-```powershell
-.\setup\install.ps1
+  Login:   http://localhost:9090/oscar/
+  User:    oscardoc
+  Pass:    mac2002
+  PIN:     1117
 ```
-
-The installer will:
-1. Start the MariaDB and OSCAR containers
-2. Wait for MariaDB to be ready
-3. Seed the `oscardoc` provider account and the default CAISI program
-
-### 3. Access OSCAR
-
-Open `http://localhost:9090/oscar/` in your browser.
-
-Login: **oscardoc** / **mac2002**
-
-OSCAR takes about 60 seconds to fully start after the containers come up.
 
 ---
 
-## Loading synthetic patients
-
-After OSCAR is running, import the Ontario synthetic patients:
+## Adding Synthetic Patients (Synthea)
 
 ```bash
-python3 patients/synthea_oscar_import.py /path/to/fhir/
+# 1. Download Synthea
+curl -L https://github.com/synthetichealth/synthea/releases/latest/download/synthea-with-dependencies.jar \
+     -o synthea.jar
+
+# 2. Generate patients
+java -jar synthea.jar Massachusetts -p 20
+
+# 3. Import into OSCAR
+pip install pymysql
+python3 patients/synthea_oscar_import.py ./output/fhir/
 ```
 
-See [patients/README.md](patients/README.md) for instructions on generating your own
-cohort with Synthea, including the required PayerManager patch for Canadian configs.
-
-The pre-built cohort used in development: 787 patients, 26k diagnoses, 22k medications,
-53k measurements, 34k encounter notes.
+Full guide: [patients/README.md](patients/README.md)
 
 ---
 
-## Natural language queries
+## Opening an eChart
 
-`oscar_llm_query.py` lets you ask clinical questions in plain English:
-
-```bash
-pip install requests pymysql
-python3 oscar_llm_query.py
-```
+After importing patients, open an eChart via:
 
 ```
-Question: How many active patients have an HbA1c above 7?
-
-[1/3] Groq generating SQL...
-  SQL: SELECT COUNT(DISTINCT demographicNo) FROM measurements
-       WHERE type = 'A1C' AND CAST(dataField AS DECIMAL(5,2)) > 7.0
-
-  Run this query? (y/n): y
-
-[2/3] Running against OSCAR MariaDB...
-  1 rows returned
-
-[3/3] MedGemma interpreting results...
-  Of your 787 synthetic patients, 312 have at least one HbA1c measurement
-  above 7.0%, indicating suboptimal glycemic control...
+http://localhost:9090/oscar/oscarEncounter/IncomingEncounter.do
+  ?case_program_id=10034&demographicNo=1&status=B
 ```
 
-Requires a Groq API key (free tier available) and Ollama with MedGemma 4B installed locally.
+Change `demographicNo=1` to any patient number from the import output.
 
 ---
 
-## Repository structure
+## Stopping / Resetting
+
+```bash
+docker compose down          # stop (keeps data)
+docker compose down -v       # full reset (wipes all data)
+```
+
+---
+
+## ⚠️ Security Warning (Public Servers)
+
+This package is designed for **local research and learning only**.
+
+If you deploy on a VPS, cloud server, or any machine with a public IP:
+
+- Port `9090` will be publicly accessible by default
+- Default credentials (`mac2002`) are well-known
+- There is no HTTPS, no firewall, no 2FA configured
+
+**Before exposing publicly:**
+1. Change the default password via OSCAR's admin panel
+2. Add a firewall rule: `sudo ufw allow from YOUR_IP to any port 9090`
+3. Put a reverse proxy (nginx) in front with HTTPS
+4. Enable 2FA in OSCAR Admin → Security
+
+For a home network behind a router with no port forwarding, the default setup is fine.
+
+---
+
+## Repository Structure
 
 ```
 oscar-emr-lab/
-├── README.md
-├── docker-compose.yml          ← MariaDB + OSCAR containers
-├── .env.example                ← Copy to .env, set password
+├── docker-compose.yml        ← Minimal lab setup (db + oscar, port 9090)
+├── .env.example              ← Copy to .env before first run
 ├── volumes/
-│   └── oscar.properties        ← Ontario billing region, program config
+│   └── oscar.properties      ← Pre-configured Ontario lab settings
 ├── setup/
-│   ├── install.sh              ← Linux/macOS one-command setup
-│   ├── install.ps1             ← Windows PowerShell equivalent
-│   └── seed.sql                ← Provider 999998 + program 10034
+│   ├── install.sh            ← One-command setup (Linux/Mac)
+│   ├── install.ps1           ← One-command setup (Windows)
+│   ├── seed.sql              ← Seeds CAISI program + provider enrollment
+│   └── patch_forward_jsp.sh  ← Fixes eChart session bug
 └── patients/
-    ├── README.md               ← Synthea generation + import guide
-    └── synthea_oscar_import.py ← FHIR R4 → OSCAR importer
+    ├── README.md             ← How to generate and import Synthea patients
+    └── synthea_oscar_import.py
 ```
 
 ---
 
-## Fidelity
+## Why This Exists
 
-See [fidelity_report.md](fidelity_report.md) for a full comparison against population benchmarks.
+The official [open-osp](https://github.com/open-osp/open-osp) project is
+production-grade and requires compiling OSCAR from source (30–60 min build).
+This package is purpose-built for **research and learning**:
 
-| Dimension | Grade | Notes |
+| | open-osp | oscar-emr-lab |
 |---|---|---|
-| Sex ratio | A | Within 3 pp of 2021 census |
-| Age distribution | B+ | Slight child undercount |
-| City rank order | B | Correct order, Toronto under-concentrated |
-| Hypertension | A | −0.8 pp vs CCHS 2019–2020 |
-| Diabetes T2 | A | −0.4 pp vs CCHS 2019–2020 |
-| Obesity | A− | −2.9 pp (measurement vs self-report artefact) |
-| COPD | C | +9.3 pp — apply age ≥35 filter |
-| Depression | D | −8.6 pp — Synthea module limitation |
+| Source compilation | Required | Not required |
+| Setup time | 30–60 min | 5–10 min |
+| Target audience | Sysadmins | Clinicians / researchers |
+| Post-install fixes | Manual | Automated |
+| Patient import | Not included | Synthea pipeline included |
+| eChart working OOTB | No | Yes |
 
 ---
 
-## Known limitations
+## Research Context
 
-- **2016 census weighting:** The synthea-international Canada configs use 2015/2016
-  Statistics Canada data. Run `build_demographics_on.py` with the 2021 StatsCan
-  Community Profiles CSV to update to 2021 data.
-- **COPD overestimate:** Use `age >= 35` and medication cross-reference for any
-  respiratory prevalence study.
-- **Depression underestimate:** Do not use for mental health prevalence studies.
-- **Synthetic data only:** This dataset is not derived from real patients and must
-  not be used for clinical decisions or regulatory submissions.
+This lab was built to study OSCAR's clinical data model, FHIR mapping gaps,
+and cognitive load in EMR workflows — from a nursing informatics perspective.
 
----
+Key schema tables documented through this work:
 
-## Roadmap
-
-- [ ] Ontario clinical modules for Synthea (ColonCancerCheck, OBSP, ODB formulary)
-- [ ] 2021 census demographics update
-- [ ] Depression module reweighting PR to synthetichealth/synthea-international
-- [ ] CIHI quality indicator calculator (DM, HTN, cancer screening)
+| Table | Clinical meaning |
+|---|---|
+| `demographic` | Patient demographics (DOB split across 3 columns) |
+| `dxresearch` | Problem list / diagnoses (SNOMED or ICD10) |
+| `drugs` | Medications / prescriptions |
+| `casemgmt_note` | Encounter / SOAP notes |
+| `admission` | CAISI program enrollment per patient |
+| `measurements` | Vitals and clinical measurements |
 
 ---
 
-## Capstone context
+## Known Issues / Bugs Fixed
 
-Built for the Health Informatics capstone project (April 2026). The pipeline addresses
-the absence of publicly available Ontario-calibrated synthetic primary care data —
-researchers currently rely on US Synthea datasets (Massachusetts) or wait months for
-ICES ethics approval to access real Ontario data.
+| Bug | Root cause | Fix |
+|---|---|---|
+| Drug profile 500 error | Hibernate null primitive on boolean columns | `install.sh` sets all to 0 |
+| "Not in your program domain" | Patient not admitted to CAISI program | `seed.sql` + import auto-admits |
+| eChart session crash | `case_program_id` null in session | `patch_forward_jsp.sh` |
+
+---
+
+## Using Claude Code (AI) to Explore OSCAR
+
+This entire lab environment was built and debugged using
+[Claude Code](https://claude.ai/code) — Anthropic's AI coding assistant —
+as a learning and development tool alongside a clinician-researcher.
+
+Claude Code was used to:
+- Trace Java stack traces and identify root causes in a 20-year-old codebase
+- Map the OSCAR database schema to clinical concepts
+- Write and debug the Synthea import pipeline
+- Identify and patch JSP session bugs without recompiling
+- Connect OSCAR's architecture to FHIR and Ontario health policy context
+
+### Suggested prompts to explore OSCAR with Claude Code
+
+Once your lab is running, paste these into a Claude Code session:
+
+```
+"I have OSCAR EMR running at localhost:9090 with MariaDB at localhost:3306
+(root / oscarlab). Help me understand how the CPP (Cumulative Patient
+Profile) is stored in the database."
+```
+
+```
+"Write a SQL query against my OSCAR database to find all patients
+with more than 3 active medications and no encounter in the past year."
+```
+
+```
+"Explain what the CAISI program_provider and admission tables do
+clinically, and how they control eChart access in OSCAR."
+```
+
+```
+"I want to understand how OSCAR stores encounter notes. Walk me through
+the casemgmt_note table and how it relates to issues and the CPP."
+```
+
+Claude Code can read your local files, run queries, and explain what it
+finds in clinical terms — useful if you're a clinician learning informatics
+or an informaticist learning clinical context.
 
 ---
 
 ## License
 
-OSCAR EMR is licensed under the GPL v2. Synthea is Apache 2.0.
-This repository's scripts and configuration are MIT licensed.
+MIT — see [LICENSE](LICENSE)
+
+OSCAR EMR is licensed under GPL v2 by McMaster University / open-osp.
+This repo contains only tooling and configuration — no OSCAR source code.
+
+---
+
+## Author
+
+Built by [@leobellopyth](https://github.com/leobellopyth) —
+Registered Nurse (RN) · Currently completing a Graduate Certificate
+in Health Informatics at George Brown College (April 2026) ·
+Clinical Informatics researcher
+
+---
+
+## Ontario Synthetic Patient Cohort
+
+The repo includes a validated pipeline for generating Ontario-calibrated synthetic
+patients using Synthea with the synthea-international Canada configs.
+
+**Cohort (787 patients):** 26k diagnoses, 22k medications, 53k measurements
+(BP, A1C, WT, HT, BMI, lipid panel, eGFR), 34k encounter notes.
+
+### Fidelity vs. Statistics Canada 2021 + CCHS 2019–2020 Ontario
+
+| Dimension | Grade | Notes |
+|---|---|---|
+| Sex ratio | A | Within 3 pp of 2021 census |
+| Age distribution | B+ | Slight child undercount |
+| Hypertension | A | 21.6% vs 22.4% reference (−0.8 pp) |
+| Diabetes T2 | A | 8.5% vs 8.9% reference (−0.4 pp) |
+| Obesity | A− | 24.2% vs 27.1% (measurement vs self-report gap) |
+| COPD | C | Overestimated — apply age ≥35 filter |
+| Depression | D | Underestimated — Synthea module limitation |
+
+Full analysis: [fidelity_report.md](fidelity_report.md)
+
+### Ontario geography fix (Synthea PayerManager patch)
+
+The unmodified Synthea JAR crashes with a `NullPointerException` when using
+Canadian configs. See [patients/README.md](patients/README.md) for the one-line patch.

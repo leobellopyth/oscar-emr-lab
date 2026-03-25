@@ -1,90 +1,92 @@
-# Synthetic Ontario Patients
+# Adding Synthetic Patients to Your OSCAR Lab
 
-This directory contains the FHIR → OSCAR import script for loading Synthea-generated
-Ontario patients into the lab OSCAR instance.
+Synthea generates realistic but fictional patient records in FHIR R4 format.
+The import script reads those files and loads them into OSCAR with all the
+required fields set correctly.
 
-## Quick start
+---
 
-```bash
-pip install pymysql
-python3 synthea_oscar_import.py /path/to/fhir/
-```
+## Prerequisites
 
-The script reads FHIR R4 bundles and inserts into OSCAR's MariaDB:
+- Python 3.8+
+- `pymysql` library: `pip install pymysql`
+- Java 11+ (for Synthea)
+- OSCAR lab running (`./setup/install.sh` completed)
 
-| FHIR resource | OSCAR table | Notes |
-|---|---|---|
-| Patient | demographic | Ontario postal codes, HIN generated |
-| Condition | dxresearch | SNOMED CT coding |
-| MedicationRequest | drugs | active/discontinued status preserved |
-| Observation | measurements | BP, A1C, WT, HT, BMI, lipid panel, eGFR |
-| Encounter | casemgmt_note | encounter type as note text |
-| (all patients) | admission | enrolled in program 10034 |
+---
 
-## Generating patients with Synthea
-
-### Prerequisites
-- Java 17+ (OpenJDK)
-- Synthea JAR with PayerManager patch (see below)
-- synthea-international Canada configs
-
-### PayerManager patch (required for Canadian configs)
-
-Synthea's `PayerManager.loadPayers()` calls `Location.getAbbreviation()` with Canadian
-province names, which returns null. Apply this one-line patch before building:
-
-In `src/main/java/org/mitre/synthea/world/agents/PayerManager.java`, line ~137:
-
-```java
-// Before (crashes with NPE on Canadian province codes):
-String abbreviation = Location.getAbbreviation(location.state).toUpperCase();
-
-// After:
-String rawAbbr = Location.getAbbreviation(location.state);
-String abbreviation = (rawAbbr != null ? rawAbbr : location.state).toUpperCase();
-```
-
-Also replace all `States Covered` values in
-`src/main/resources/payers/insurance_companies_ca.csv` with `MA` (any valid US
-state code — the payer data is not used in FHIR output).
-
-### Generate 500 Ontario patients
+## Step 1 — Download Synthea
 
 ```bash
-java -jar synthea-with-dependencies.jar -p 500 Ontario \
-  --exporter.baseDirectory=./output/ \
-  --generate.demographics.default_file=/path/to/ca/geography/demographics_ca.csv \
-  --generate.geography.zipcodes.default_file=/path/to/ca/geography/zipcodes_ca.csv \
-  --generate.geography.timezones.default_file=/path/to/ca/geography/timezones_ca.csv \
-  --generate.payers.insurance_companies.default_file=/path/to/ca/payers/insurance_companies_ca.csv \
-  --generate.providers.hospitals.default_file=/path/to/ca/providers/hospitals_ca.csv \
-  --generate.providers.primarycare.default_file=/path/to/ca/providers/primarycare_ca.csv
+curl -L https://github.com/synthetichealth/synthea/releases/latest/download/synthea-with-dependencies.jar \
+     -o synthea.jar
 ```
 
-Then import:
+---
+
+## Step 2 — Generate Patients
+
+Synthea uses US state geography. We use Massachusetts (the default) and
+override the province to Ontario in the import script.
+
 ```bash
+# Generate 20 patients
+java -jar synthea.jar Massachusetts -p 20 --exporter.fhir.export=true
+
+# Output lands in: output/fhir/
+```
+
+Options:
+```bash
+-p 50        # number of patients
+--seed 12345 # reproducible output
+```
+
+---
+
+## Step 3 — Import into OSCAR
+
+OSCAR must be running first.
+
+```bash
+# Default (localhost:3306, password oscarlab)
+python3 patients/synthea_oscar_import.py ./output/fhir/
+
+# Custom DB connection (e.g. remote server)
+OSCAR_DB_HOST=192.168.2.38 \
+OSCAR_DB_PASS=lyn1iIyOSVA= \
 python3 patients/synthea_oscar_import.py ./output/fhir/
 ```
 
-## Configuration
+Output:
+```
+Found 20 patient bundle(s) in ./output/fhir/
 
-Edit the top of `synthea_oscar_import.py` to match your OSCAR instance:
+  Allegra Renner (2012-07-26, F) → demo #1  [12 dx, 3 meds]
+  Antonio Watsica (1978-03-14, M) → demo #2  [8 dx, 5 meds]
+  ...
 
-```python
-DB_HOST     = '192.168.2.38'   # MariaDB host (use 127.0.0.1 if running locally)
-DB_PORT     = 3306
-DB_USER     = 'root'
-DB_PASS     = 'your_password'
-PROVIDER_NO = '999998'         # Must match a row in the provider table
+✓ 20 patient(s) imported into OSCAR.
 ```
 
-## Fidelity
+---
 
-See `fidelity_report.md` at the repo root for a comparison of the generated cohort
-against Statistics Canada 2021 Census and CCHS 2019-2020 Ontario prevalence data.
+## Step 4 — Open an eChart
 
-Key findings:
-- Hypertension: 21.6% vs 22.4% reference (-0.8 pp)
-- Diabetes T2: 8.5% vs 8.9% reference (-0.4 pp)
-- COPD: overestimated (~17% vs ~8%) — apply age ≥35 filter for prevalence studies
-- Depression: underestimated (0.5% vs ~9%) — known Synthea module limitation
+```
+http://localhost:9090/oscar/oscarEncounter/IncomingEncounter.do
+  ?case_program_id=10034&demographicNo=1&status=B
+```
+
+Change `demographicNo=1` to any number from the import output.
+
+---
+
+## Notes
+
+- Each import run adds new patients (it does not check for duplicates).
+  Re-running with the same files will create duplicate records.
+- All patients are admitted to the OSCAR program (id 10034) automatically,
+  which is required for eChart access.
+- Province is set to `ON` (Ontario) regardless of Synthea's US geography.
+- Health card numbers (HIN) are randomly generated for Ontario format.

@@ -1,69 +1,105 @@
 #!/usr/bin/env bash
-# install.sh — One-command OSCAR EMR lab setup (Linux / macOS)
-# Usage: bash setup/install.sh
-set -euo pipefail
+# install.sh — oscar-emr-lab one-command setup
+# Usage: ./setup/install.sh
+# Requires: Docker with Compose plugin (v2)
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(dirname "$SCRIPT_DIR")"
+set -e
+cd "$(dirname "$0")/.."
 
-echo "=== OSCAR EMR Lab Setup ==="
+OSCAR_URL="http://localhost:9090/oscar/"
+DB_CONTAINER="oscar-lab-db"
+OSCAR_CONTAINER="oscar-lab-oscar"
 
-# ── 1. Prerequisites check ────────────────────────────────────────────────
-for cmd in docker python3; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "ERROR: $cmd not found. Install it and re-run."
-        exit 1
-    fi
-done
+# ── Colours ───────────────────────────────────────────────────────────────
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+ok()   { echo -e "${GREEN}✓${NC} $*"; }
+info() { echo -e "${YELLOW}→${NC} $*"; }
+fail() { echo -e "${RED}✗${NC} $*"; exit 1; }
 
-# ── 2. Create .env from example if not present ────────────────────────────
-if [ ! -f "$REPO_DIR/.env" ]; then
-    cp "$REPO_DIR/.env.example" "$REPO_DIR/.env"
-    echo "Created .env — edit it to set a secure MYSQL_ROOT_PASSWORD, then re-run."
-    exit 0
+echo ""
+echo "╔══════════════════════════════════════════╗"
+echo "║      oscar-emr-lab  ·  setup script      ║"
+echo "╚══════════════════════════════════════════╝"
+echo ""
+
+# ── Prerequisites ─────────────────────────────────────────────────────────
+info "Checking prerequisites..."
+command -v docker >/dev/null 2>&1 || fail "Docker not found. Install Docker Desktop: https://docs.docker.com/get-docker/"
+docker info >/dev/null 2>&1      || fail "Docker daemon is not running. Please start Docker and retry."
+docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin not found. Update Docker Desktop to v2.x or later."
+ok "Docker is ready."
+
+# ── .env ──────────────────────────────────────────────────────────────────
+if [ ! -f .env ]; then
+    info "Creating .env from .env.example..."
+    cp .env.example .env
+    ok ".env created (lab credentials: oscarlab / oscarlab)."
+else
+    ok ".env already exists."
 fi
 
-# Abort if password is still the placeholder
-if grep -q "change_me_before_use" "$REPO_DIR/.env"; then
-    echo "ERROR: Set a real MYSQL_ROOT_PASSWORD in .env before continuing."
-    exit 1
-fi
+# ── Pull images ───────────────────────────────────────────────────────────
+info "Pulling Docker images (no compilation required)..."
+docker compose pull
+ok "Images ready."
 
-# ── 3. Start containers ───────────────────────────────────────────────────
-echo "[1/4] Starting Docker containers..."
-cd "$REPO_DIR"
+# ── Start containers ──────────────────────────────────────────────────────
+info "Starting containers..."
 docker compose up -d
+ok "Containers started."
 
-# ── 4. Wait for MariaDB ───────────────────────────────────────────────────
-echo "[2/4] Waiting for MariaDB to be ready..."
-DB_CONTAINER=$(docker compose ps -q db)
+# ── Wait for MariaDB ──────────────────────────────────────────────────────
+info "Waiting for MariaDB to be ready..."
 for i in $(seq 1 30); do
-    if docker exec "$DB_CONTAINER" mysqladmin ping -uroot \
-       -p"$(grep MYSQL_ROOT_PASSWORD .env | cut -d= -f2)" \
-       --silent 2>/dev/null; then
-        echo "  MariaDB ready."
+    if docker exec "$DB_CONTAINER" mysqladmin ping -uroot -poscarlab --silent 2>/dev/null; then
+        ok "MariaDB is ready."
         break
     fi
-    sleep 2
+    [ $i -eq 30 ] && fail "MariaDB did not become ready in time. Check: docker logs $DB_CONTAINER"
+    sleep 3
 done
 
-# ── 5. Seed provider and program ──────────────────────────────────────────
-echo "[3/4] Seeding provider and program..."
-ROOT_PASS=$(grep MYSQL_ROOT_PASSWORD .env | cut -d= -f2)
-docker exec -i "$DB_CONTAINER" \
-    mysql -uroot -p"$ROOT_PASS" oscar \
-    < "$SCRIPT_DIR/seed.sql" && echo "  Seed complete." || echo "  Seed skipped (already seeded)."
+# ── Wait for OSCAR (Tomcat) ───────────────────────────────────────────────
+info "Waiting for OSCAR to start (this takes ~60–90 seconds on first run)..."
+for i in $(seq 1 40); do
+    HTTP=$(curl -s -o /dev/null -w "%{http_code}" "$OSCAR_URL" 2>/dev/null || true)
+    if [ "$HTTP" = "200" ] || [ "$HTTP" = "302" ]; then
+        ok "OSCAR is responding (HTTP $HTTP)."
+        break
+    fi
+    [ $i -eq 40 ] && fail "OSCAR did not start in time. Check: docker logs $OSCAR_CONTAINER"
+    printf "."
+    sleep 5
+done
+echo ""
 
-# ── 6. Done ───────────────────────────────────────────────────────────────
-OSCAR_PORT=$(grep OSCAR_PORT .env | cut -d= -f2)
-OSCAR_PORT=${OSCAR_PORT:-9090}
-echo "[4/4] Done."
+# ── Seed database ─────────────────────────────────────────────────────────
+info "Seeding database (program, provider enrollment)..."
+docker exec -i "$DB_CONTAINER" mysql -uroot -poscarlab oscar < setup/seed.sql
+ok "Database seeded."
+
+# ── Patch forward.jsp ─────────────────────────────────────────────────────
+info "Applying eChart session patch..."
+bash setup/patch_forward_jsp.sh "$OSCAR_CONTAINER"
+
+# ── Done ──────────────────────────────────────────────────────────────────
 echo ""
-echo "  OSCAR is starting at: http://localhost:${OSCAR_PORT}/oscar/"
-echo "  Login:  oscardoc / mac2002"
+echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║  ✓  OSCAR EMR 19 Lab is ready!                               ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo "  To import synthetic patients:"
-echo "    pip install pymysql"
-echo "    python3 patients/synthea_oscar_import.py /path/to/fhir/"
+echo "  Login URL:  $OSCAR_URL"
+echo "  Username:   oscardoc"
+echo "  Password:   mac2002"
+echo "  PIN:        1117"
 echo ""
-echo "  OSCAR takes ~60 seconds to finish loading after containers start."
+echo "  eChart URL: http://localhost:9090/oscar/oscarEncounter/IncomingEncounter.do"
+echo "              ?case_program_id=10034&demographicNo=DEMO_NO&status=B"
+echo ""
+echo "  Add patients:"
+echo "    1. Download Synthea:  patients/README.md"
+echo "    2. Run import:        python3 patients/synthea_oscar_import.py /path/to/fhir/"
+echo ""
+echo "  Stop:   docker compose down"
+echo "  Reset:  docker compose down -v  (wipes all data)"
+echo ""

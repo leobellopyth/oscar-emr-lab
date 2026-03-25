@@ -1,67 +1,108 @@
-# install.ps1 — One-command OSCAR EMR lab setup (Windows PowerShell)
+# install.ps1 — oscar-emr-lab setup for Windows (PowerShell)
 # Usage: .\setup\install.ps1
-#Requires -Version 5.1
-Set-StrictMode -Version Latest
+# Requires: Docker Desktop for Windows
+
 $ErrorActionPreference = "Stop"
+Set-Location (Split-Path $PSScriptRoot)
 
-$RepoDir = Split-Path $PSScriptRoot -Parent
-$EnvFile = Join-Path $RepoDir ".env"
-$EnvExample = Join-Path $RepoDir ".env.example"
+$OSCAR_URL    = "http://localhost:9090/oscar/"
+$DB_CONTAINER = "oscar-lab-db"
+$OSC_CONTAINER= "oscar-lab-oscar"
 
-Write-Host "=== OSCAR EMR Lab Setup ===" -ForegroundColor Cyan
+function ok   { param($msg) Write-Host "✓ $msg" -ForegroundColor Green }
+function info { param($msg) Write-Host "→ $msg" -ForegroundColor Yellow }
+function fail { param($msg) Write-Host "✗ $msg" -ForegroundColor Red; exit 1 }
 
-# ── 1. Prerequisites check ────────────────────────────────────────────────
-foreach ($cmd in @("docker", "python")) {
-    if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Error "$cmd not found. Install it and re-run."
-    }
+Write-Host ""
+Write-Host "╔══════════════════════════════════════════╗"
+Write-Host "║      oscar-emr-lab  ·  setup script      ║"
+Write-Host "╚══════════════════════════════════════════╝"
+Write-Host ""
+
+# Prerequisites
+info "Checking prerequisites..."
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { fail "Docker not found. Install Docker Desktop: https://docs.docker.com/get-docker/" }
+docker info 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { fail "Docker daemon not running. Start Docker Desktop and retry." }
+ok "Docker is ready."
+
+# .env
+if (-not (Test-Path ".env")) {
+    info "Creating .env from .env.example..."
+    Copy-Item ".env.example" ".env"
+    ok ".env created (lab credentials: oscarlab / oscarlab)."
+} else {
+    ok ".env already exists."
 }
 
-# ── 2. Create .env from example if not present ────────────────────────────
-if (-not (Test-Path $EnvFile)) {
-    Copy-Item $EnvExample $EnvFile
-    Write-Host "Created .env — edit MYSQL_ROOT_PASSWORD, then re-run." -ForegroundColor Yellow
-    exit 0
-}
+# Pull images
+info "Pulling Docker images (no compilation required)..."
+docker compose pull
+ok "Images ready."
 
-$EnvContent = Get-Content $EnvFile -Raw
-if ($EnvContent -match "change_me_before_use") {
-    Write-Error "Set a real MYSQL_ROOT_PASSWORD in .env before continuing."
-}
-
-# ── 3. Start containers ───────────────────────────────────────────────────
-Write-Host "[1/4] Starting Docker containers..."
-Push-Location $RepoDir
+# Start
+info "Starting containers..."
 docker compose up -d
+ok "Containers started."
 
-# ── 4. Wait for MariaDB ───────────────────────────────────────────────────
-Write-Host "[2/4] Waiting for MariaDB..."
-$RootPass = ($EnvContent | Select-String "MYSQL_ROOT_PASSWORD=(.+)").Matches[0].Groups[1].Value.Trim()
-$DbContainer = docker compose ps -q db
-$ready = $false
-for ($i = 0; $i -lt 30; $i++) {
-    $result = docker exec $DbContainer mysqladmin ping -uroot "-p$RootPass" --silent 2>$null
-    if ($LASTEXITCODE -eq 0) { $ready = $true; Write-Host "  MariaDB ready."; break }
-    Start-Sleep 2
+# Wait for MariaDB
+info "Waiting for MariaDB..."
+for ($i = 1; $i -le 30; $i++) {
+    $ping = docker exec $DB_CONTAINER mysqladmin ping -uroot -poscarlab --silent 2>&1
+    if ($LASTEXITCODE -eq 0) { ok "MariaDB is ready."; break }
+    if ($i -eq 30) { fail "MariaDB did not start. Check: docker logs $DB_CONTAINER" }
+    Start-Sleep 3
 }
-if (-not $ready) { Write-Error "MariaDB did not become ready in time." }
 
-# ── 5. Seed ───────────────────────────────────────────────────────────────
-Write-Host "[3/4] Seeding provider and program..."
-$SeedSql = Join-Path $PSScriptRoot "seed.sql"
-Get-Content $SeedSql | docker exec -i $DbContainer mysql -uroot "-p$RootPass" oscar
-Write-Host "  Seed complete."
+# Wait for OSCAR
+info "Waiting for OSCAR to start (~60-90 seconds on first run)..."
+for ($i = 1; $i -le 40; $i++) {
+    try {
+        $resp = Invoke-WebRequest -Uri $OSCAR_URL -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+        if ($resp.StatusCode -in @(200, 302)) { ok "OSCAR is responding."; break }
+    } catch {}
+    if ($i -eq 40) { fail "OSCAR did not start. Check: docker logs $OSC_CONTAINER" }
+    Write-Host "." -NoNewline
+    Start-Sleep 5
+}
+Write-Host ""
 
-# ── 6. Done ───────────────────────────────────────────────────────────────
-$OscarPort = if ($EnvContent -match "OSCAR_PORT=(\d+)") { $Matches[1] } else { "9090" }
-Write-Host "[4/4] Done." -ForegroundColor Green
+# Seed
+info "Seeding database..."
+Get-Content "setup\seed.sql" | docker exec -i $DB_CONTAINER mysql -uroot -poscarlab oscar
+ok "Database seeded."
+
+# Patch
+info "Applying eChart session patch..."
+$JSP = "/usr/local/tomcat/webapps/oscar/casemgmt/forward.jsp"
+$WORK = "/usr/local/tomcat/work/Catalina/localhost/oscar/org/apache/jsp/casemgmt"
+$already = docker exec $OSC_CONTAINER grep -c "case_program_id fallback" $JSP 2>&1
+if ($already -gt 0) {
+    ok "forward.jsp already patched."
+} else {
+    docker exec $OSC_CONTAINER sed -i `
+      's|    String useNewCaseMgmt;|    // case_program_id fallback (oscar-emr-lab patch)\n    String _cpid = request.getParameter(\"case_program_id\");\n    if (_cpid != null \&\& _cpid.length() > 0) { session.setAttribute(\"case_program_id\", _cpid); }\n    else if (session.getAttribute(\"case_program_id\") == null) { session.setAttribute(\"case_program_id\", \"10034\"); }\n    String useNewCaseMgmt;|' `
+      $JSP
+    docker exec $OSC_CONTAINER rm -f "$WORK/forward_jsp.class" "$WORK/forward_jsp.java" 2>&1 | Out-Null
+    ok "forward.jsp patched."
+}
+
+# Done
 Write-Host ""
-Write-Host "  OSCAR is starting at: http://localhost:$OscarPort/oscar/" -ForegroundColor Cyan
-Write-Host "  Login:  oscardoc / mac2002"
+Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Green
+Write-Host "║  ✓  OSCAR EMR 19 Lab is ready!                               ║" -ForegroundColor Green
+Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Green
 Write-Host ""
-Write-Host "  To import synthetic patients:"
-Write-Host "    pip install pymysql"
-Write-Host "    python patients\synthea_oscar_import.py C:\path\to\fhir\"
+Write-Host "  Login URL:  $OSCAR_URL"
+Write-Host "  Username:   oscardoc"
+Write-Host "  Password:   mac2002"
+Write-Host "  PIN:        1117"
 Write-Host ""
-Write-Host "  OSCAR takes ~60 seconds to finish loading after containers start."
-Pop-Location
+Write-Host "  eChart:     http://localhost:9090/oscar/oscarEncounter/IncomingEncounter.do"
+Write-Host "              ?case_program_id=10034&demographicNo=DEMO_NO&status=B"
+Write-Host ""
+Write-Host "  Add patients: See patients\README.md"
+Write-Host ""
+Write-Host "  Stop:   docker compose down"
+Write-Host "  Reset:  docker compose down -v  (wipes all data)"
+Write-Host ""
